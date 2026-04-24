@@ -1,0 +1,455 @@
+@startuml TinyFirmware_ArchitectureV2
+title Audio Engine - TinyMB Firmware - Architecture V2
+skinparam class {
+  BackgroundColor<<implemented>> #eaffea
+  BackgroundColor<<todo>> #fff5e6
+  BorderColor<<rework>> #ff9900
+  BorderColor<<todo>> #ffcc66
+  BorderColor<<implemented>> #66aa66
+}
+
+' === Signals ===
+package "Engine :: Signals" as EngineSignals {
+    ' === Enums ===
+    enum SignalType {
+        NONE
+        AUDIO
+        CONTROL
+        EVENT
+    }
+
+    enum EventType {
+        NOTE_ON
+        NOTE_OFF
+        CONTROL_CHANGE
+    }
+
+    ' === Interface ===
+    interface ISignal {
+        +getType() : SignalType
+    }
+
+    ' === Implementations ===
+    class AudioSignal implements ISignal {
+        +AudioSignal(buffer : vector<float>, bufferSize : size_t)
+        +getBufferSize() : int
+        +getBuffer() : float[]
+        -SignalType type = SignalType::AUDIO
+        -buffer : vector<float>
+        -size : size_t
+    }
+
+    class ControlSignal implements ISignal {
+        -value : atomic<float>
+    }
+
+    class EventSignal implements ISignal {
+        -type : SignalType = SignalType::EVENT
+        -eventType : EventType 
+        -data : u_int8[2] 'event data (e.g., note number, velocity)'
+        -offset : uint32 'time offset in samples'  
+    }
+
+    '=== Relations ===
+}
+
+
+' === Ports ===
+package "Engine :: Ports" as EnginePorts {
+    '=== Abstract Port ===
+    abstract class Port {
+        + getType() : SignalType
+        + getName() : string
+        #name : string
+        #type : SignalType
+    }
+
+    '=== Input & Output Ports ===
+    class InputPort extends Port {
+         +InputPort(name : const string, type : SignalType)
+        +receive(signal : ISignal) : void
+        +get() : ISignal
+        -vector<ISignal> receivedSignals
+    }
+
+    class OutputPort extends Port {
+         +OutputPort(name : const string, type : SignalType)
+        +connect(target : InputPort) : void
+        +disconnect(target : InputPort) : void
+        +send(signal : ISignal) : void
+        -vector<InputPort> connections
+    }
+
+    class Connection {
+        +Connection(source : OutputPort, target : InputPort)
+        +getSource() : OutputPort
+        +getTarget() : InputPort
+        -source : OutputPort
+        -target : InputPort
+    }
+
+    '=== structures ===
+    struct ConnectionInfo {
+        +sourceModule : string
+        +sourcePortName : string
+        +targetModule : string
+        +targetPortName : string
+    }
+    '=== relations ===
+    Connection "*" --> "1" InputPort
+    Connection "*" --> "1" OutputPort
+}
+
+' === Modules ===
+package "Engine :: Modules" as EngineModules {
+    '=== Enums ===
+    enum ADSRState {
+        ATTACK
+        DECAY
+        SUSTAIN
+        RELEASE
+        OFF
+    }
+
+    enum WaveformType {
+        SINE
+        SQUARE
+        TRIANGLE
+        SAWTOOTH
+    }
+
+    '=== Interface ===
+    interface IModule {
+        +process(context : AudioContext) : void
+        +clone() : IModule*
+        +connectOutput(port : OutputPort, target : InputPort) : void
+        +getInputsPorts() : vector<InputPort>
+        +getInputPortByName(name : const string) : InputPort
+        +getOutputsPorts() : vector<OutputPort>
+        +getOutputPortByName(name : const string) : OutputPort
+        +setEventEmitter(emitter : IEventEmitter) : void
+        +getName() : string
+    }
+
+    '=== abstract Base Module ===
+    abstract class BaseModule implements IModule {
+        #inputs : vector<InputPort>
+        #outputs : vector<OutputPort>
+        #name : string
+        #eventEmitter : IEventEmitter
+    }
+
+    '=== node Modules ===
+    class ModuleGroup extends BaseModule {
+        +getAudioGraph() : AudioGraph
+        +setAudioGraph(graph : AudioGraph) : void
+        -audioGraph : AudioGraph
+    }
+
+    class Instrument extends ModuleGroup {
+        +Instrument(name : const string)
+        -voiceManager : VoiceManager
+        -audioInputPort : InputPort
+    }
+
+    '=== Leaf Modules ===
+    class ADSRModule extends BaseModule {
+        +ADSRModule(name : const string)
+        +setState(state : ADSRState) : void
+        -state : ADSRState = OFF
+        -_attackTimeParam : shared_ptr<Param<float>>
+        -_decayTimeParam : shared_ptr<Param<float>>
+        -_sustainLevelParam : shared_ptr<Param<float>>
+        -_releaseTimeParam : shared_ptr<Param<float>>
+        -currentLevel : float
+        -stateElapsedTime : chrono::steady_clock::time_point
+        -stateElapsedMs : float
+        - releaseStartLevel : float
+    }
+
+    class ArpeggiatorModule extends BaseModule {
+        +ArpeggiatorModule(name : const string)
+        -timeInterval : shared_ptr<Param<float>> 
+        -noteSequence : shared_ptr<Param<vector<int>>>
+        -lastNote : int
+        -currentIndex : int
+        -lastEventTime : chrono::steady_clock::time_point
+    }
+
+    class AudioOutputModule extends BaseModule {
+        +AudioOutputModule(name : const string, backend : IAudioOutputBackend)
+        -backend : IAudioOutputBackend
+    }
+
+    class DebugModule extends BaseModule {
+        +DebugModule(name : const string)
+    }
+
+    class FilterModule extends BaseModule {
+        +FilterModule(name : const string)
+        -cutoffFrequency : shared_ptr<Param<float>>
+        -resonance : shared_ptr<Param<float>>
+        -filterType : shared_ptr<Param<FilterType>>
+        -x1, x2, y1, y2 : float
+    }
+
+    class InstrumentAudioOutputModule extends BaseModule {
+        +InstrumentAudioOutputModule(name : const string)
+    }
+
+    class OscillatorModule extends BaseModule {
+        +OscillatorModule(name : const string)
+        +setWaveform(waveform : WaveformType) : void
+        +getWaveform() : WaveformType
+        +getPhase() : float
+        -waveform : shared_ptr<Param<WaveformType>>
+        -phase : float
+    }
+
+    class SamplerModule extends BaseModule {
+        + SamplerModule(name : const string)
+        + getLoadedSamplesCount() : size_t
+        + clearSamples() : void
+        - triggerSample(noteNumber : int, velocity : float) : void
+        - stopSample(noteNumber : int) : void
+        - findFreeVoice() : SampleVoice*
+        - mixVoices(context : AudioContext) : shared_ptr<AudioSignal>
+        - samples : shared_ptr<Param<Map<int, WavData>>>
+        - voices : vector<SampleVoice>
+        - maxVoices : size_t
+    }
+
+    struct SampleVoice {
+        +sampleData : vector<float>
+        +playbackPosition : size_t
+        +noteNumber : int
+        +velocity : float
+        +isPlaying : bool
+        +sampleRate : uint32_t
+    }
+
+    class StepSequencerModule extends BaseModule {
+        +StepSequencerModule(name : const string)
+        +reset() : void
+        -calculateStepDuration(sampleRate : float) : void
+        -tracks : shared_ptr<Param<vector<SequencerTrack>>>
+        -currentStep : size_t
+        -stepCount : shared_ptr<Param<size_t>> 
+        -bpm : shared_ptr<Param<float>>
+        -sampleCounter : size_t
+        -samplesPerStep : size_t
+        -lastStepTime : chrono::steady_clock::time_point
+    }
+
+    struct SequencerTrack {
+        +noteNumber : int
+        +velocity : int
+        +pattern : vector<bool>
+    }
+
+    package "Engine :: Module - Factory" as EngineModuleFactory {
+
+        class ModuleFactory <<final>> {
+            {static} instance() : ModuleFactory&
+            +create(name : std::string_view) : std::shared_ptr<IModule>
+            +create(name : std::string_view, emitter : IEventEmitter*) : std::shared_ptr<IModule>
+            {static} registerModule(key : std::string, fn : Creator) : bool
+            {static} unregisterModule(key : std::string_view) : void
+            {static} registry() : std::unordered_map<std::string, Creator>&
+            -_id_counter : int
+        }
+
+        class AutoRegister <<final>> {
+            +AutoRegister(key : std::string, fn : Creator)
+        }
+
+    }
+
+    package "Engine :: Module - Parameters" as EngineModuleParameters {
+        
+        interface ParamBase {
+            +getName() : string
+        }
+
+        class Param<T> implements ParamBase {
+            +Param(name : const string, defaultValue : T)
+            +get() : T
+            +set(value : T) : void
+            +getName() : string
+            -name : string
+            -value : T
+        }
+
+        class Parameters {
+            + getParameters() : vector<shared_ptr<ParamBase>>
+            - parameters : vector<shared_ptr<ParamBase>>
+        }
+    }
+
+    class AudioGraph {
+        +clone() : AudioGraph*
+        +addModule(module : shared_ptr<IModule>) : void
+        +removeModule(moduleId : int) : void
+        +connect(src : OutputPort, dest : InputPort) : void
+        +disconnect(src : OutputPort, dest : InputPort) : void
+        +process() : void
+        +setContext(context : AudioContext) : void
+        +getContext() : AudioContext
+        +getModules() : vector<shared_ptr<IModule>>
+        +getAllParams() : map<string, vector<shared_ptr<ParamBase>>>
+        +getScopedParams(scope : string) : map<string, vector<shared_ptr<ParamBase>>>
+        +getConnections() : vector<Connection>
+        +getConnectionsInfo() : vector<ConnectionInfo>
+        - topologicalSort() : vector<shared_ptr<IModule>>
+        - updateExecutionOrder() : void
+        - modules : vector<shared_ptr<IModule>>
+        - connections : vector<Connection>
+        - executionOrder : vector<shared_ptr<IModule>>
+        - context : AudioContext
+    } 
+
+    '=== Relations ===
+    ArpeggiatorModule --|> Parameters
+    ADSRModule --|> Parameters
+    FilterModule --|> Parameters
+    OscillatorModule --|> Parameters
+    SamplerModule --|> Parameters
+    StepSequencerModule --|> Parameters
+
+    SamplerModule --|> SampleVoice : use
+
+    StepSequencerModule --|> SequencerTrack : use
+
+    ADSRModule --|> ADSRState : use
+
+    OscillatorModule --|> WaveformType : use
+
+    SamplerModule --|> WavData : use
+
+    AutoRegister ..> ModuleFactory : registers
+    ModuleFactory ..> IModule : creates
+    ModuleFactory ..> IEventEmitter : optional param
+
+    AudioOutputModule ..> IAudioOutputBackend : uses
+
+    ' Mediator
+    AudioGraph "1" o-- "*" IModule
+    AudioGraph "1" o-- "*" Connection
+
+
+}
+
+package "Engine :: Utils" as EngineUtils {
+    struct WavData {
+        +sampleRate : uint32_t
+        +numFrames : uint32_t
+        +numChannels : uint16_t
+        +sample : vector<float>
+    }
+
+    class WavLoader {
+        +load(filepath : const string) : WavData
+        - readPCM16(file : ifstream, numSamples : uint32_t) : vector<float>
+        - readPCM24(file : ifstream, numSamples : uint32_t) : vector<float>
+        - readPCM32(file : ifstream, numSamples : uint32_t) : vector<float>
+
+        {static} readInt24(const unsigned char[3]) : int32_t
+    }
+}
+
+package "Engine :: Core" as EngineCore {
+
+    enum VoiceState {
+        ACTIVE
+        RELEASED
+        INACTIVE
+    }
+
+    interface IAudioOutputBackend {
+        +open() : bool
+        +close() : void
+        +write(buffer : float[], size : size_t) : void
+    }
+
+    interface IEventEmitter {
+        +emit(event : IEvent) : void
+    }
+
+    class AlsaOutputBackend implements IAudioOutputBackend {
+        +lastError() : string
+        +lastErrorCode() : int
+        +cleanError() : void
+        -setError(where : const char*, errNo : int) : void
+        -handle : snd_pcm_t*
+        -lastErrNo : int
+        -lastErrMsg : string
+        -sampleRate : int
+        -channel : int
+    }
+
+    interface IMixStrategy {
+        +mix(signal : AudioSignal) : AudioSignal
+    }
+
+    class AdditiveMix implements IMixStrategy {
+        +mix(signal : AudioSignal) : AudioSignal
+    }
+
+    class Voice {
+        +Voice(AudioGraph graph)
+        +noteOn(note : int, velocity : float) : void
+        +noteOff(note : int) : void
+        +isActive() : bool
+        +isReleased() : bool
+        +isInactive() : bool
+        +setState(state : VoiceState) : void
+        +getNoteNumber() : int
+        +getVelocity() : float
+        +getAudioGraph() : AudioGraph
+        +setAudioGraph(graph : AudioGraph) : void
+        -state : VoiceState
+        -noteNumber : int
+        -velocity : float
+        -audioGraph : AudioGraph
+    }
+
+    class VoiceManager {
+        +VoiceManager(maxVoices : int)
+        +noteOn(note : int, velocity : float, graph : AudioGraph) : void
+        +noteOff(note : int) : void
+        +removeInactiveVoices() : void
+        +getVoices() : vector<Voice>
+        +getActiveVoices() : vector<Voice>
+        +setMixStrategy(strategy : IMixStrategy) : void
+        +getMixStrategy() : IMixStrategy
+        -findFreeVoice() : shared_ptr<Voice>
+        -voices : vector<Voice>
+        -maxVoices : int
+        -mixStrategy : IMixStrategy
+        -activeVoices : vector<Voice>
+    }
+
+
+    class AudioContext {
+        +bufferSize : int
+        +sampleRate : int
+        +frequency : float
+        +isNoteOn : bool
+    }
+
+    '=== relations ===
+    Voice --|> VoiceState : use
+    Voice --|> AudioGraph : use
+
+    VoiceManager --|> Voice : use
+    VoiceManager --|> IMixStrategy : use
+    VoiceManager --|> AudioGraph : use
+
+
+}
+
+
+
+
+
+@enduml

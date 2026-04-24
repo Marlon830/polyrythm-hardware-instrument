@@ -1,0 +1,8 @@
+#ifndef AUDIO_PARAMETERS_HPP
+#define AUDIO_PARAMETERS_HPP
+
+#define NB_CHANNELS 1
+#define SAMPLE_RATE 44100
+#define BUFFER_SIZE 512
+
+#endif

@@ -1,0 +1,8 @@
+build/
+*.o
+*.obj
+.vscode
+log
+/.vs
+.idea
+TODO

@@ -1,0 +1,52 @@
+{
+    "name": "tb303_acid",
+    "modules": [
+      {
+        "type": "oscillator",
+        "name": "osc_303",
+        "params": {
+          "waveform": "sawtooth",
+          "pitch": 0
+        }
+      },
+      {
+        "type": "filter",
+        "name": "lpf_303",
+        "params": {
+          "type": "lowpass",
+          "cutoff": 400,
+          "resonance": 0.7
+        }
+      },
+      {
+        "type": "envelope",
+        "name": "filter_env",
+        "params": {
+          "attack": 0.0,
+          "decay": 0.15,
+          "sustain": 0.0,
+          "release": 0.05
+        }
+      },
+      {
+        "type": "adsr",
+        "name": "amp_env",
+        "params": {
+          "attack": 0.005,
+          "decay": 0.2,
+          "sustain": 0.0,
+          "release": 0.1
+        }
+      },
+      {
+        "type": "instrument_audio_out",
+        "name": "instrument_audio_out"
+      }
+    ],
+    "connections": [
+      {"from": "osc_303:out", "to": "lpf_303:in"},
+      {"from": "filter_env:out", "to": "lpf_303:cutoffCV"},
+      {"from": "lpf_303:out", "to": "amp_env:in"},
+      {"from": "amp_env:out", "to": "instrument_audio_out:in"}
+    ]
+}
